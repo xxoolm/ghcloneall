@@ -2,12 +2,7 @@ import os
 import re
 import subprocess
 import sys
-
-
-try:
-    from cStringIO import StringIO
-except ImportError:  # pragma: PY3
-    from io import StringIO
+from io import StringIO
 
 import pytest
 import requests
@@ -37,6 +32,8 @@ class MockResponse:
 
 class MockRequestGet:
 
+    user_endpoint = 'https://api.github.com/user'
+
     def __init__(self):
         self.responses = {}
         self.not_found = MockResponse(
@@ -45,6 +42,15 @@ class MockRequestGet:
 
     def update(self, responses):
         self.responses.update(responses)
+
+    def set_user(self, user):
+        if user is None:
+            if self.user_endpoint in self.responses:
+                del self.responses[self.user_endpoint]
+        else:
+            self.responses[self.user_endpoint] = MockResponse(
+                json={'login': user},
+            )
 
     def __call__(self, url, headers=None):
         return self.responses.get(url, self.not_found)
@@ -55,6 +61,7 @@ def mock_requests_get(monkeypatch):
     mock_get = MockRequestGet()
     monkeypatch.setattr(requests, 'get', mock_get)
     monkeypatch.setattr(requests.Session, 'get', mock_get)
+    mock_get.set_user(None)
     return mock_get
 
 
@@ -101,10 +108,15 @@ def mock_config_filename(monkeypatch):
 
 
 def make_page_url(url, page, extra):
+    # Some of the incoming test URLs already have query args. If so,
+    # append the page arguments using the appropriate separator.
+    sep = '?'
+    if '?' in url:
+        sep = '&'
     if page == 1:
-        return '%s?%sper_page=100' % (url, extra)
+        return '%s%s%sper_page=100' % (url, sep, extra)
     else:
-        return '%s?%spage=%d&per_page=100' % (url, extra, page)
+        return '%s%s%spage=%d&per_page=100' % (url, sep, extra, page)
 
 
 def mock_multi_page_api_responses(url, pages, extra='sort=full_name&'):
@@ -847,9 +859,50 @@ def test_RepoWrangler_list_repos_filter_by_status(mock_requests_get):
         Repo('c'),
         Repo('p', private=True),
     ]
+
+
+def test_RepoWrangler_list_repos_no_private(mock_requests_get):
+    mock_requests_get.update(mock_multi_page_api_responses(
+        url='https://api.github.com/users/test_user/repos',
+        pages=[
+            [
+                repo('a', archived=True),
+                repo('f', fork=True),
+                repo('p', private=True),
+                repo('d', disabled=True),
+                repo('c'),
+            ],
+        ],
+    ))
+    wrangler = ghcloneall.RepoWrangler()
     result = wrangler.list_repos(user='test_user', include_private=False)
     assert result == [
         Repo('c'),
+        Repo('d', disabled=True),
+    ]
+    result = wrangler.list_repos(user='test_user', include_private=False,
+                                 include_archived=True)
+    assert result == [
+        Repo('a', archived=True),
+        Repo('c'),
+        Repo('d', disabled=True),
+    ]
+    result = wrangler.list_repos(user='test_user', include_private=False,
+                                 include_forks=True)
+    assert result == [
+        Repo('c'),
+        Repo('d', disabled=True),
+        Repo('f', fork=True),
+    ]
+    result = wrangler.list_repos(user='test_user', include_private=False,
+                                 include_disabled=False)
+    assert result == [
+        Repo('c'),
+    ]
+    result = wrangler.list_repos(user='test_user', include_private=False)
+    assert result == [
+        Repo('c'),
+        Repo('d', disabled=True),
     ]
 
 
@@ -1328,7 +1381,22 @@ def test_main_no_org_gists(monkeypatch, capsys):
     )
 
 
-def test_main_run_error_handling(monkeypatch, capsys):
+def test_main_run_error_handling_with_private_token(
+        monkeypatch, mock_requests_get, capsys):
+    monkeypatch.setattr(sys, 'argv', [
+        'ghcloneall', '--user', 'mgedmin', '--github-token', 'xyzzy',
+    ])
+    mock_requests_get.set_user('mgedmin')
+    with pytest.raises(SystemExit) as ctx:
+        ghcloneall.main()
+    assert str(ctx.value) == (
+        'Failed to fetch https://api.github.com/user/repos'
+        '?affiliation=owner&sort=full_name&per_page=100:\n'
+        'not found'
+    )
+
+
+def test_main_run_error_handling_no_private_token(monkeypatch, capsys):
     monkeypatch.setattr(sys, 'argv', [
         'ghcloneall', '--user', 'mgedmin',
     ])
@@ -1359,8 +1427,75 @@ def test_main_run(monkeypatch, mock_requests_get, capsys):
     ghcloneall.main()
     assert show_ansi_result(capsys.readouterr().out) == (
         '+ ghcloneall (new)\n'
+        '1 repositories: 0 updated, 1 new, 0 dirty.'
+    )
+
+
+def test_main_run_with_token(monkeypatch, mock_requests_get, capsys):
+    monkeypatch.setattr(sys, 'argv', [
+        'ghcloneall', '--user', 'mgedmin', '--concurrency=1',
+        '--github-token', 'fake-token',
+    ])
+    mock_requests_get.set_user('mgedmin')
+    mock_requests_get.update(mock_multi_page_api_responses(
+        url='https://api.github.com/user/repos?affiliation=owner',
+        pages=[
+            [
+                repo('ghcloneall'),
+                repo('experiment', archived=True),
+                repo('typo-fix', fork=True),
+                repo('xyzzy', private=True, disabled=True),
+            ],
+        ],
+    ))
+    ghcloneall.main()
+    assert show_ansi_result(capsys.readouterr().out) == (
+        '+ ghcloneall (new)\n'
         '+ xyzzy (new)\n'
         '2 repositories: 0 updated, 2 new, 0 dirty.'
+    )
+
+
+def test_main_run_with_mismatched_token(monkeypatch, mock_requests_get,
+                                        capsys):
+    monkeypatch.setattr(sys, 'argv', [
+        'ghcloneall', '--user', 'test_user', '--concurrency=1',
+        '--github-token', 'fake-token',
+    ])
+    mock_requests_get.set_user('some-other-user')
+    with pytest.raises(SystemExit) as ctx:
+        ghcloneall.main()
+    assert str(ctx.value) == (
+        'The github_user specified (test_user) '
+        'does not match the token used.'
+    )
+
+
+def test_main_run_private_without_token(monkeypatch, mock_requests_get,
+                                        capsys):
+    monkeypatch.setattr(sys, 'argv', [
+        'ghcloneall', '--user', 'mgedmin', '--concurrency=1',
+        '--include-private',
+    ])
+    mock_requests_get.update(mock_multi_page_api_responses(
+        url='https://api.github.com/users/mgedmin/repos',
+        pages=[
+            [
+                repo('ghcloneall'),
+                repo('experiment', archived=True),
+                repo('typo-fix', fork=True),
+                repo('xyzzy', private=True, disabled=True),
+            ],
+        ],
+    ))
+    ghcloneall.main()
+    captured = capsys.readouterr()
+    assert show_ansi_result(captured.out) == (
+        '+ ghcloneall (new)\n'
+        '1 repositories: 0 updated, 1 new, 0 dirty.'
+    )
+    assert captured.err == (
+        'Warning: Listing private repositories requires a GitHub token\n'
     )
 
 
