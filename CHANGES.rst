@@ -2,10 +2,26 @@ Changelog
 =========
 
 
-1.10.2 (unreleased)
+1.13.0 (unreleased)
 -------------------
 
-- Add support for Python 3.10.
+- Drop support for Python 3.7.
+
+
+1.12.0 (2024-10-09)
+-------------------
+
+- Add support for Python 3.12 and 3.13.
+- Drop support for Python 2.7.
+
+
+1.11.0 (2022-10-27)
+-------------------
+
+- Add support for Python 3.10 and 3.11.
+- Drop support for Python 3.6.
+- Fix ``ghcloneall --user ... --github-token ... --include-private`` not
+  including any private repositories (GH: #16).
 
 
 1.10.1 (2021-05-26)

@@ -1,7 +1,7 @@
 ghcloneall
 ==========
 
-.. image:: https://github.com/mgedmin/ghcloneall/workflows/build/badge.svg?branch=master
+.. image:: https://github.com/mgedmin/ghcloneall/actions/workflows/build.yml/badge.svg?branch=master
     :target: https://github.com/mgedmin/ghcloneall/actions
 
 .. image:: https://ci.appveyor.com/api/projects/status/github/mgedmin/ghcloneall?branch=master&svg=true
@@ -75,6 +75,16 @@ check faster!
 Synopsis
 --------
 
+.. [[[cog
+..   import cog, subprocess, textwrap, os
+..   os.environ['COLUMNS'] = '80'  # consistent line wrapping
+..   helptext = subprocess.run(['ghcloneall', '--help'],
+..                             capture_output=True, text=True).stdout
+..   cog.outl('\nOther command-line options::\n')
+..   cog.outl('    $ ghcloneall --help')
+..   cog.outl(textwrap.indent(helptext, '    '))
+.. ]]]
+
 Other command-line options::
 
     $ ghcloneall --help
@@ -87,10 +97,9 @@ Other command-line options::
                       [--exclude-disabled] [--init] [--http-cache DBNAME]
                       [--no-http-cache]
 
-
     Clone/update all user/org repositories from GitHub.
 
-    optional arguments:
+    options:
       -h, --help            show this help message and exit
       --version             show program's version number and exit
       -c CONCURRENCY, --concurrency CONCURRENCY
@@ -113,7 +122,8 @@ Other command-line options::
                             (default)
       --include-archived    include archived repositories
       --exclude-archived    exclude archived repositories (default)
-      --include-private     include private repositories (default)
+      --include-private     include private repositories (default when a github
+                            token is provided)
       --exclude-private     exclude private repositories
       --include-disabled    include disabled repositories (default)
       --exclude-disabled    exclude disabled repositories
@@ -121,6 +131,8 @@ Other command-line options::
       --http-cache DBNAME   cache HTTP requests on disk in an sqlite database for
                             5 minutes (default: .httpcache)
       --no-http-cache       disable HTTP disk caching
+
+.. [[[end]]]
 
 
 Configuration file
@@ -140,6 +152,7 @@ should look like this::
     # gists = False
     # include_forks = False
     # include_archived = False
+    # Listing private repositories requires a valid github_token
     # include_private = True
     # include_disabled = True
 

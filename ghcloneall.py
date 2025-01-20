@@ -3,8 +3,6 @@
 Clone all Git repositories for a GitHub user or organisation.
 """
 
-from __future__ import print_function
-
 import argparse
 import fnmatch
 import os
@@ -12,15 +10,8 @@ import subprocess
 import sys
 import threading
 from concurrent import futures
+from configparser import ConfigParser
 from operator import attrgetter
-
-
-try:
-    # Python 2
-    from ConfigParser import SafeConfigParser as ConfigParser
-except ImportError:  # pragma: PY3
-    # Python 3
-    from configparser import ConfigParser
 
 import requests
 import requests_cache
@@ -29,7 +20,7 @@ import requests_cache
 __author__ = 'Marius Gedminas <marius@gedmin.as>'
 __licence__ = 'MIT'
 __url__ = 'https://github.com/mgedmin/ghcloneall'
-__version__ = '1.10.2.dev0'
+__version__ = '1.13.0.dev0'
 
 
 CONFIG_FILE = '.ghcloneallrc'
@@ -398,6 +389,7 @@ class RepoWrangler(object):
         self.lock = threading.Lock()
 
         self.session = requests.Session()
+        self.has_auth_token = bool(token)
         if token:
             self.session.auth = ('', token)
 
@@ -422,20 +414,18 @@ class RepoWrangler(object):
         # - exclude private gists (if g['public'])
         return sorted(map(Repo.from_gist, gists), key=attrgetter('name'))
 
+    def _verify_user_token(self, user):
+        # Verify that the user and token match
+        user_data, _ = get_json_and_links('https://api.github.com/user',
+                                          session=self.session)
+        if user_data.get('login') == user:
+            return
+        raise Error('The github_user specified ({}) '
+                    'does not match the token used.'.format(user))
+
     def list_repos(self, user=None, organization=None, pattern=None,
                    include_archived=False, include_forks=False,
                    include_private=True, include_disabled=True):
-        if organization and not user:
-            owner = organization
-            list_url = 'https://api.github.com/orgs/{}/repos'.format(owner)
-        elif user and not organization:
-            owner = user
-            list_url = 'https://api.github.com/users/{}/repos'.format(owner)
-        else:
-            raise ValueError('specify either user or organization, not both')
-
-        message = "Fetching list of {}'s repositories from GitHub...".format(
-            owner)
 
         # User repositories default to sort=full_name, org repositories default
         # to sort=created.  In theory we don't care because we will sort the
@@ -444,7 +434,30 @@ class RepoWrangler(object):
         # happen before pagination, i.e. on the server side, as I want to
         # process the repositories alphabetically (both for aesthetic reasons,
         # and in order for --start-from to be useful).
-        list_url += '?sort=full_name'
+
+        if organization and not user:
+            owner = organization
+            list_url = ('https://api.github.com/orgs/{}/repos'
+                        '?sort=full_name').format(
+                            owner)
+        elif user and not organization:
+            owner = user
+            if include_private and self.has_auth_token:
+                self._verify_user_token(user)
+                # users/$name/repos does not include private repos, so
+                # we have to query for the repos owned by the current
+                # user instead.  This only works if the current token
+                # is associated with that user.
+                list_url = ('https://api.github.com/user/repos'
+                            '?affiliation=owner&sort=full_name')
+            else:
+                list_url = ('https://api.github.com/users/{}/repos'
+                            '?sort=full_name').format(owner)
+        else:
+            raise ValueError('specify either user or organization, not both')
+
+        message = "Fetching list of {}'s repositories from GitHub...".format(
+            owner)
 
         repos = self.get_github_list(list_url, message)
         if not include_archived:
@@ -812,7 +825,8 @@ def _main():
         help='exclude archived repositories (default)')
     parser.add_argument(
         '--include-private', action='store_true', default=None,
-        help='include private repositories (default)')
+        help=('include private repositories '
+              '(default when a github token is provided)'))
     parser.add_argument(
         '--exclude-private', action='store_false', dest='include_private',
         help='exclude private repositories')
@@ -917,8 +931,12 @@ def _main():
                     CONFIG_FILE))
         return
 
+    if args.include_private and not args.github_token:
+        print('Warning: Listing private repositories requires a GitHub token',
+              file=sys.stderr)
+        args.include_private = False
     if args.include_private is None:
-        args.include_private = True
+        args.include_private = bool(args.github_token)
     if args.include_disabled is None:
         args.include_disabled = True
 

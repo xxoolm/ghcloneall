@@ -4,12 +4,12 @@ environment:
   matrix:
     # https://www.appveyor.com/docs/installed-software#python lists available
     # versions
-    - PYTHON: "C:\\Python27"
-    - PYTHON: "C:\\Python36"
-    - PYTHON: "C:\\Python37"
     - PYTHON: "C:\\Python38"
     - PYTHON: "C:\\Python39"
     - PYTHON: "C:\\Python310"
+    - PYTHON: "C:\\Python311"
+    - PYTHON: "C:\\Python312"
+    - PYTHON: "C:\\Python313"
 
 init:
   - "echo %PYTHON%"
